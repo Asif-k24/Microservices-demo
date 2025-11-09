@@ -1,54 +1,108 @@
-deployments-tests:
-  needs: complete-demo-sync-check
-  runs-on: ubuntu-latest
-  env:
-    kind-version: 'v0.10.0'
-    kind-image: 'kindest/node:v1.20.0'
-  timeout-minutes: 15  # extra buffer
-  steps:
-    - uses: actions/checkout@v2
+name: ci
 
-    - name: Start KinD
-      uses: engineerd/setup-kind@v0.5.0
-      with:
-        version: ${{ env.kind-version }}
-        image: ${{ env.kind-image }}
+on:
+  push:
+    branches:
+      - "*"  # run for branches
+    tags:
+      - "*"  # run for tags
 
-    - name: Wait cluster to start
-      run: |
-        echo "Waiting for Kubernetes cluster to be ready..."
-        until kubectl version --short; do
-          echo "Cluster not ready yet..."
-          sleep 5
-        done
+jobs:
+  #
+  #
+  # check complete demo is in sync with individual manifest, it should block from merge
+  complete-demo-sync-check:
+    runs-on: ubuntu-latest
+    env:
+      COMPLETE_DEMO_ARGS: --rm -v ${{ github.workspace }}:/workdir
+      COMPLETE_DEMO_DIR: deploy/kubernetes/
+      COMPLETE_DEMO_IMAGE: manifests-image
+    steps:
+      - uses: actions/checkout@v2
 
-    - name: Deploy Complete Demo
-      run: |
-        echo "Applying complete-demo.yaml"
-        kubectl apply -f deploy/kubernetes/complete-demo.yaml
+      #
+      #
+      # Build image
+      - name: Build image
+        env:
+          DOCKER_BUILDKIT: 1
+        run: docker build -t $COMPLETE_DEMO_IMAGE $COMPLETE_DEMO_DIR
 
-        MAX_WAIT=600  # seconds (10 minutes)
-        SLEEP=5
-        ELAPSED=0
+      #
+      #
+      # Check that manifest and complete-demo.yaml have the same content
+      - name: check complete-demo.yaml content sync
+        run: docker run $COMPLETE_DEMO_ARGS $COMPLETE_DEMO_IMAGE make -C $COMPLETE_DEMO_DIR check-complete-demo
 
-        echo "Waiting for pods to be ready..."
-        while [ "$(kubectl get pods -A --no-headers | grep -cEv '([0-9]+)/\1')" -ne 0 ]; do
-          sleep $SLEEP
-          ELAPSED=$((ELAPSED + SLEEP))
-          if [ $ELAPSED -ge $MAX_WAIT ]; then
-            echo "Timeout waiting for pods!"
-            echo "Status of all pods:"
-            kubectl get pods -A
-            echo "Detailed pod descriptions:"
-            kubectl describe pods -A
-            echo "Logs of all pods in sock-shop namespace:"
-            for pod in $(kubectl get pods -n sock-shop -o name); do
-              echo "Logs for $pod:"
-              kubectl logs -n sock-shop $pod || true
-            done
-            exit 1
-          fi
-        done
+  #
+  #
+  # check that we can deploy complete-demo
+  deployments-tests:
+    needs: complete-demo-sync-check
+    runs-on: ubuntu-latest
+    env:
+      kind-version: v0.10.0
+      kind-image: kindest/node:v1.20.0
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Start KinD
+        uses: engineerd/setup-kind@v0.5.0
+        with:
+          version: ${{ env.kind-version }}
+          image: ${{ env.kind-image }}
+          
+      - name: Wait cluster to start
+        run: |
+          until [ "$(kubectl get pods -A --no-headers | grep -cEv '([0-9]+)/\1')" -eq 0 ]; do
+            sleep 5s
+          done
+          kubectl get pod -A
+          
+      - name: Run and test Complete demo
+        run: |
+          kubectl apply -f deploy/kubernetes/complete-demo.yaml
+          until [ "$(kubectl get pods -n sock-shop --no-headers | grep -cEv '([0-9]+)/\1')" -eq 0 ]; do
+            sleep 5s
+            kubectl get pods -n sock-shop
+            kubectl describe node | grep "Allocated resources" -A 10
+          done
+          kubectl get pod -A
 
-        echo "All pods are ready!"
-        kubectl get pods -A
+  #
+  #
+  # build openapi and healthcheck images
+  build-test-images:
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    env:
+      GROUP: weaveworksdemos
+    strategy:
+      matrix:
+        repo:
+          - openapi
+          - healthcheck
+    steps:
+      - uses: actions/checkout@v2
+
+      #
+      #
+      # Push to dockerhub
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          context: ./${{ matrix.repo }}
+          push: true
+          tags: |
+            ${{ env.GROUP }}/${{ matrix.repo }}:${{ github.sha }}
+            ${{ env.GROUP }}/${{ matrix.repo }}:latest
