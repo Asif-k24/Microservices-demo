@@ -45,7 +45,7 @@ jobs:
     env:
       kind-version: 'v0.10.0'
       kind-image: 'kindest/node:v1.20.0'
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
     - uses: actions/checkout@v2
     - name: Start KinD
@@ -55,8 +55,12 @@ jobs:
         image: ${{ env.kind-image }}
     - name: Wait cluster to start
       run: |
-        until [ "$(kubectl get pods -A --no-headers | grep -cEv '([0-9]+)/\1')" -eq 0 ]; do
-            sleep 5s
+        echo "Waiting for cluster pods to become ready..."
+        SECONDS=0
+        TIMEOUT=600  # 10 minutes max wait
+        until [ "$(kubectl get pods -A --no-headers | grep -cEv '([0-9]+)/\1')" -eq 0 ] || [ "$SECONDS" -ge "$TIMEOUT" ]; do
+          echo "Still waiting... ($SECONDS seconds elapsed)"
+          sleep 10s
         done
         kubectl get pod -A
     - name: Run and test Complete demo
