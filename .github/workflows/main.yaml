@@ -36,47 +36,38 @@ jobs:
       - name: check complete-demo.yaml content sync
         run: docker run $COMPLETE_DEMO_ARGS $COMPLETE_DEMO_IMAGE make -C $COMPLETE_DEMO_DIR check-complete-demo
 
-  deployments-tests:  # FIXED: Removed incorrect indentation here
+  deployments-tests:
     needs: complete-demo-sync-check
     runs-on: ubuntu-latest
-    env:
-      kind-version: v0.20.0  # Updated from v0.10.0
-      kind-image: kindest/node:v1.27.3  # Updated from v1.20.0
-    timeout-minutes: 15  # Increased timeout
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4  # Updated from v2
+      - uses: actions/checkout@v4
       
-      - name: Start KinD
-        uses: engineerd/setup-kind@v0.6.0  # Updated from v0.5.0
+      - name: Create KinD Cluster
+        uses: helm/kind-action@v1.8.0
         with:
-          version: ${{ env.kind-version }}
-          image: ${{ env.kind-image }}
+          node_image: kindest/node:v1.27.3
+          wait: 60s
+          config: |
+            kind: Cluster
+            apiVersion: kind.x-k8s.io/v1alpha4
+            nodes:
+            - role: control-plane
+            - role: worker
           
-      - name: Wait for cluster to be ready
+      - name: Verify Cluster
         run: |
-          # More robust waiting with timeout
-          timeout 300 bash -c 'until kubectl get nodes && kubectl wait --for=condition=Ready nodes --all --timeout=60s; do sleep 10; done'
           kubectl cluster-info
-          
-      - name: Wait for all system pods to be ready
-        run: |
-          # Wait for core DNS and other system pods
-          kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
-          kubectl wait --for=condition=Ready pod -l component=etcd -n kube-system --timeout=300s
-          kubectl wait --for=condition=Ready pod -l component=kube-apiserver -n kube-system --timeout=300s
-          kubectl wait --for=condition=Ready pod -l component=kube-controller-manager -n kube-system --timeout=300s
-          kubectl wait --for=condition=Ready pod -l component=kube-scheduler -n kube-system --timeout=300s
+          kubectl get nodes
           kubectl get pods -A
           
-      - name: Run and test Complete demo
+      - name: Deploy Sock Shop
         run: |
-          # Apply the complete demo
           kubectl apply -f deploy/kubernetes/complete-demo.yaml
           
-          # Wait for sock-shop namespace to be created
-          sleep 10
-          
-          # Wait for all sock-shop pods to be ready with better timeout handling
+      - name: Wait for Sock Shop deployment
+        run: |
+          # Wait up to 10 minutes for all pods to be ready
           timeout 600 bash -c '
             while true; do
               ready=$(kubectl get pods -n sock-shop --no-headers 2>/dev/null | grep -c "Running" || true)
@@ -87,16 +78,13 @@ jobs:
                 echo "All pods are ready!"
                 break
               fi
-              
-              # Show pod status for debugging
-              kubectl get pods -n sock-shop --no-headers | head -10
               sleep 10
             done
           '
           
-          # Final status check
-          kubectl get pods -n sock-shop
-          kubectl get services -n sock-shop
+      - name: Verify deployment
+        run: |
+          kubectl get all -n sock-shop
           
       - name: Test application accessibility
         run: |
