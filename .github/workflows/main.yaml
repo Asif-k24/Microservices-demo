@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Create KinD Cluster
         uses: helm/kind-action@v1.8.0
         with:
@@ -54,17 +54,17 @@ jobs:
             nodes:
             - role: control-plane
             - role: worker
-          
+
       - name: Verify Cluster
         run: |
           kubectl cluster-info
           kubectl get nodes
           kubectl get pods -A
-          
+
       - name: Deploy Sock Shop
         run: |
           kubectl apply -f deploy/kubernetes/complete-demo.yaml
-          
+
       - name: Wait for Sock Shop deployment
         run: |
           # Wait up to 10 minutes for all pods to be ready
@@ -81,22 +81,22 @@ jobs:
               sleep 10
             done
           '
-          
+
       - name: Verify deployment
         run: |
           kubectl get all -n sock-shop
-          
+
       - name: Test application accessibility
         run: |
           # Port forward to test the frontend
           kubectl port-forward -n sock-shop service/front-end 8080:80 &
           PF_PID=$!
           sleep 10
-          
+
           # Test if the application responds
           curl -f http://localhost:8080/ || echo "Frontend not responding"
           curl -f http://localhost:8080/catalogue || echo "Catalogue not responding"
-          
+
           # Kill port forward
           kill $PF_PID
 
