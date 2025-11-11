@@ -1,11 +1,11 @@
-FROM mhart/alpine-node:6.17
+FROM node:16-alpine
 
 ENV NODE_ENV "development"
 ENV NODE_PATH "/usr/src/app/node_modules"
 
 # Install base dependencies
 RUN apk update
-RUN apk add git python
+RUN apk add git python3
 
 # Prepare app directory
 WORKDIR /usr/src/app
